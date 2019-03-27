@@ -5,6 +5,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"encoding/json"
 
 	"github.com/gorilla/websocket"
 )
@@ -14,6 +15,9 @@ var addr = flag.String("addr", ":8080", "http service address")
 var upgrader = websocket.Upgrader{
 	ReadBufferSize: 1024,
 	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true	
+	},
 }
 
 type Client struct {
@@ -27,6 +31,13 @@ type Hub struct {
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
+	name string
+}
+
+type Message struct {
+	Message string `json:"message"`
+	Sender string `json:"sender"`
+	Created string `json:"created"`
 }
 
 func newHub() {
@@ -35,13 +46,16 @@ func newHub() {
 		broadcast:  make(chan []byte),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		name: name, 
 	}
 }
 
-func (h *Hub) run() {
+func (h *Hub) run() 
+	log.Printf("running new hub %v", h.name)
 	for {
 		select {
 		case client := <-h.register:
+			log.Printf("new client registered %v", h.name)
 			h.clients[client] = true
 		case client := <-h.unregister:
 			if _, ok := h.clients[client]; ok {
@@ -61,6 +75,42 @@ func (h *Hub) run() {
 	}
 }
 
+func (c *Client) read() {
+    defer func() {
+        manager.unregister <- c
+        c.socket.Close()
+    }()
+
+    for {
+        _, message, err := c.socket.ReadMessage()
+        if err != nil {
+            manager.unregister <- c
+            c.socket.Close()
+            break
+        }
+        jsonMessage, _ := json.Marshal(&Message{Sender: c.id, Content: string(message)})
+        manager.broadcast <- jsonMessage
+    }
+}
+
+func (c *Client) write() {
+    defer func() {
+        c.socket.Close()
+    }()
+
+    for {
+        select {
+        case message, ok := <-c.send:
+            if !ok {
+                c.socket.WriteMessage(websocket.CloseMessage, []byte{})
+                return
+            }
+
+            c.socket.WriteMessage(websocket.TextMessage, message)
+        }
+    }
+}
+
 func serveHOME(w http.ResponseWriter, r *http.Request) {
 	log.Println(r.URL)
 	if r.URL.Path != "/" {
@@ -71,7 +121,7 @@ func serveHOME(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Nawt Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	http.ServeFile(w, r, "home.html")
+	http.ServeFile(w, r, "index.html")
 }
 
 func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
@@ -87,8 +137,8 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 	client.hub.register <- client
 
-	go client.writePump()
-	go client.readPump()
+	go client.read()
+	go client.write()
 }
 
 func main() {

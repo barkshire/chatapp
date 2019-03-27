@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"flag"
 	"log"
 	"net/http"
@@ -9,6 +10,11 @@ import (
 )
 
 var addr = flag.String("addr", ":8080", "http service address")
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize: 1024,
+	WriteBufferSize: 1024,
+}
 
 type Client struct {
 	hub  *Hub
@@ -68,8 +74,34 @@ func serveHOME(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "home.html")
 }
 
+func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	client := &Client{
+		hub: hub,
+		conn: conn,
+		send: make(chan []byte, 256)
+	}
+	client.hub.register <- client
+
+	go client.writePump()
+	go client.readPump()
+}
+
 func main() {
 	flag.Parse()
 
+	http.HandleFunc("/", serveHOME)
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		serveWs(hub, w, r)
+	})
+
+	err := http.ListenAndServe(*addr, nil)
+	if err != nil {
+		log.Fatal("ListenAndServe: ", err)
+	}
 	// fmt.Println("hello world!")
 }
